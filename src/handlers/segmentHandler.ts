@@ -18,17 +18,31 @@ export class SegmentHandler {
 
     public handlePut = (req: Request, res: Response): void => {
         const channelId = req.params.channelId;
-        const segmentUriRelative = req.path.substring(req.path.indexOf(channelId) + channelId.length + 1);
-        const segmentFullPath = req.path;
+        
+        // 경로 처리 로직 수정 - 정규 표현식을 사용하여 정확하게 파싱
+        // URL 형태: /live/channelId/segment.ts
+        const fullPath = req.path;
+        
+        // URL에서 '/live/{channelId}/' 이후의 부분이 segment 경로
+        const segmentPathRegex = new RegExp(`^/live/${channelId}/(.+)$`);
+        const match = fullPath.match(segmentPathRegex);
+        
+        // 세그먼트 상대 경로 추출
+        const segmentUriRelative = match ? match[1] : '';
+        
+        this.logger.debug(`Full path: ${fullPath}`);
+        this.logger.debug(`Channel ID: ${channelId}`);
+        this.logger.debug(`Segment relative path: ${segmentUriRelative}`);
+        
         const rawBody = (req as any).rawBody;
 
         if (!rawBody) {
-            this.logger.error(`[${channelId}] Received PUT for ${segmentFullPath} but no body found.`);
+            this.logger.error(`[${channelId}] Received PUT for ${fullPath} but no body found.`);
             res.status(400).send('Bad Request: Missing body');
             return;
         }
 
-        this.logger.info(`[${channelId}] Received PUT for TS: ${segmentFullPath} (${rawBody.length} bytes)`);
+        this.logger.info(`[${channelId}] Received PUT for TS: ${fullPath} (${rawBody.length} bytes)`);
 
         // Store the TS file
         const filePath = path.join(this.mockStoragePath, channelId, segmentUriRelative);

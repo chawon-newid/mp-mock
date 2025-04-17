@@ -27,6 +27,12 @@ export interface M3u8TrackingInfo {
     segmentArrivalIntervals: number[]; // Array of intervals between segment arrivals (for jitter calculation)
 }
 
+export interface Config {
+    port: number;
+    mockStoragePath: string;
+    segmentArrivalTimeoutBufferMs: number;
+}
+
 declare module 'express' {
     interface Request {
         rawBody?: Buffer;

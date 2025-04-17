@@ -81,24 +81,53 @@ export class M3u8Handler {
 
     public handlePut = async (req: Request, res: Response): Promise<void> => {
         const channelId = req.params.channelId;
-        const m3u8Uri = req.path;
+        const fullPath = req.path;
         
-        // 경로가 '/live/:channelId/' 형식이므로 기본 파일 이름을 'playlist.m3u8'로 설정
-        let filename = path.basename(m3u8Uri);
-        if (!filename) {
+        this.logger.debug(`Processing PUT request for path: ${fullPath}`);
+        this.logger.debug(`Channel ID from params: ${channelId}`);
+        
+        // 경로 처리 개선
+        // URL 형태: /live/channelId/
+        // URL 형태: /live/channelId/playlist.m3u8
+        let filename = '';
+        
+        if (fullPath.endsWith('/')) {
+            // 경로가 슬래시로 끝나면 기본 파일명 사용
             filename = 'playlist.m3u8';
+            this.logger.debug(`Path ends with slash, using default filename: ${filename}`);
+        } else {
+            // 정규 표현식으로 파일명 추출
+            const filenameRegex = new RegExp(`^/live/${channelId}/(.+)$`);
+            const match = fullPath.match(filenameRegex);
+            
+            if (match && match[1]) {
+                filename = match[1];
+                this.logger.debug(`Extracted filename from path: ${filename}`);
+            } else {
+                // 파일명을 추출할 수 없는 경우 기본값 사용
+                filename = 'playlist.m3u8';
+                this.logger.debug(`Could not extract filename, using default: ${filename}`);
+            }
+            
+            // 파일 확장자 확인
+            if (!filename.includes('.')) {
+                filename = `${filename}.m3u8`;
+                this.logger.debug(`Added .m3u8 extension: ${filename}`);
+            }
         }
         
         const m3u8Key = `${channelId}/${filename}`;
         const rawBody = (req as any).rawBody;
 
-        this.logger.debug(`WebDAV PUT request received for ${m3u8Uri}`);
+        this.logger.debug(`WebDAV PUT request received for ${fullPath}`);
+        this.logger.debug(`File will be saved as: ${filename}`);
+        this.logger.debug(`M3U8 tracking key: ${m3u8Key}`);
         this.logger.debug(`Request headers:`, req.headers);
         this.logger.debug(`Request params:`, req.params);
         this.logger.debug(`Request body length:`, rawBody?.length);
 
         if (!rawBody) {
-            this.logger.error(`Received PUT for ${m3u8Uri} but no body found.`);
+            this.logger.error(`Received PUT for ${fullPath} but no body found.`);
             res.status(400).send('Bad Request: Missing body');
             return;
         }
@@ -136,7 +165,7 @@ export class M3u8Handler {
 
         // Parse M3U8 content and update tracking info
         try {
-            const parsedData = parseM3u8(m3u8Content, m3u8Uri, channelId);
+            const parsedData = parseM3u8(m3u8Content, fullPath, channelId);
             this.logger.debug(`Parsed M3U8 data:`, parsedData);
             if (parsedData) {
                 const now = Date.now();
@@ -154,7 +183,7 @@ export class M3u8Handler {
                 
                 // Create or update tracking info
                 const trackingInfo: M3u8TrackingInfo = {
-                    m3u8Uri: m3u8Uri,
+                    m3u8Uri: fullPath,
                     targetDuration: parsedData.targetDuration,
                     segments: new Map(),
                     allSegmentsReceived: parsedData.allSegmentsReceived,
@@ -204,10 +233,10 @@ export class M3u8Handler {
                 this.streamTracker.set(m3u8Key, trackingInfo);
                 this.logger.debug(`Updated streamTracker for ${m3u8Key}`);
             } else {
-                this.logger.warn(`Could not parse M3U8 content for ${m3u8Uri}`);
+                this.logger.warn(`Could not parse M3U8 content for ${fullPath}`);
             }
         } catch (error) {
-            this.logger.error(`Failed to parse M3U8 or update tracker for ${m3u8Uri}`, error);
+            this.logger.error(`Failed to parse M3U8 or update tracker for ${fullPath}`, error);
             // Decide if we should send 500 or if partial success is okay
             // Let's assume parsing failure means we can't proceed reliably
             res.status(500).send('Internal Server Error: Failed to parse M3U8');

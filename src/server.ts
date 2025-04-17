@@ -44,12 +44,6 @@ const reportGenerator = new ReportGenerator(config.mockStoragePath, streamTracke
 // Create Express app
 const app = express();
 
-// Start real-time report generation
-const REPORT_INTERVAL_MS = 5000; // 5 seconds
-setInterval(() => {
-    reportGenerator.saveReport(`realtime_report_${Date.now()}.txt`);
-}, REPORT_INTERVAL_MS);
-
 // Middleware to get raw body for PUT requests
 app.use((req: Request, res: Response, next: NextFunction) => {
     if (req.method === 'PUT') {
@@ -59,7 +53,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
         });
         req.on('end', () => {
             (req as any).rawBody = Buffer.concat(data);
-            logger.http(`[${req.method}] ${req.path} - Body length: ${(req as any).rawBody?.length || 0}`);
+            logger.http(`[${req.method}] ${req.originalUrl} - Body length: ${(req as any).rawBody?.length || 0}`);
             next();
         });
     } else {
@@ -69,16 +63,32 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 
 // Log all requests
 app.use((req: Request, res: Response, next: NextFunction) => {
-    logger.http(`[${req.method}] ${req.path} - Headers: ${JSON.stringify(req.headers)}`);
+    // 원래 URL과 경로 매개변수를 함께 로깅
+    const requestInfo = {
+        originalUrl: req.originalUrl,
+        path: req.path,
+        params: req.params,
+        method: req.method
+    };
+    logger.debug(`Request info: ${JSON.stringify(requestInfo)}`);
+    logger.http(`[${req.method}] ${req.originalUrl} - Headers: ${JSON.stringify(req.headers)}`);
     next();
 });
 
-// Route handlers
+// Route handlers - 경로 매칭 패턴 명확히 하기
 app.put('/live/:channelId/', (req: Request, res: Response) => {
+    logger.debug(`M3U8 handler triggered for: ${req.originalUrl}, channelId: ${req.params.channelId}`);
+    m3u8Handler.handlePut(req, res);
+});
+
+// playlist.m3u8와 같은 형식의 URL도 지원
+app.put('/live/:channelId/:filename([^/]+\\.m3u8)', (req: Request, res: Response) => {
+    logger.debug(`M3U8 handler triggered for file: ${req.originalUrl}, channelId: ${req.params.channelId}, filename: ${req.params.filename}`);
     m3u8Handler.handlePut(req, res);
 });
 
 app.put('/live/:channelId/*.ts', (req: Request, res: Response) => {
+    logger.debug(`Segment handler triggered for: ${req.originalUrl}`);
     segmentHandler.handlePut(req, res);
 });
 

@@ -18,21 +18,42 @@ export class SegmentHandler {
 
     public handlePut = (req: Request, res: Response): void => {
         const channelId = req.params.channelId;
-        
-        // 경로 처리 로직 수정 - 정규 표현식을 사용하여 정확하게 파싱
-        // URL 형태: /live/channelId/segment.ts
         const fullPath = req.path;
-        
-        // URL에서 '/live/{channelId}/' 이후의 부분이 segment 경로
-        const segmentPathRegex = new RegExp(`^/live/${channelId}/(.+)$`);
-        const match = fullPath.match(segmentPathRegex);
-        
-        // 세그먼트 상대 경로 추출
-        const segmentUriRelative = match ? match[1] : '';
         
         this.logger.debug(`Full path: ${fullPath}`);
         this.logger.debug(`Channel ID: ${channelId}`);
-        this.logger.debug(`Segment relative path: ${segmentUriRelative}`);
+        this.logger.debug(`Original URL: ${req.originalUrl}`);
+        this.logger.debug(`Request params: ${JSON.stringify(req.params)}`);
+        
+        // 세그먼트 상대 경로 추출 - MediaPackage v2 스타일과 일반 스타일 모두 지원
+        let segmentUriRelative = '';
+        
+        if (fullPath.startsWith('/in/v2/')) {
+            // MediaPackage v2 스타일 URL: /in/v2/{channelId}/{channelId}/{segmentPath}
+            if (req.params.segmentPath) {
+                segmentUriRelative = req.params.segmentPath;
+                this.logger.debug(`MediaPackage v2 style path detected, segment path: ${segmentUriRelative}`);
+            } else {
+                // segmentPath 매개변수가 없는 경우 (채널 엔드포인트인 경우)
+                this.logger.error(`MediaPackage v2 style URL without segment path: ${fullPath}`);
+                res.status(400).send('Bad Request: Missing segment path');
+                return;
+            }
+        } else {
+            // 기존 스타일 URL: /live/{channelId}/{segmentPath}
+            const segmentPathRegex = new RegExp(`^/live/${channelId}/(.+)$`);
+            const match = fullPath.match(segmentPathRegex);
+            segmentUriRelative = match ? match[1] : '';
+            this.logger.debug(`Standard style path detected, segment path: ${segmentUriRelative}`);
+        }
+        
+        if (!segmentUriRelative) {
+            this.logger.error(`Could not extract segment path from URL: ${fullPath}`);
+            res.status(400).send('Bad Request: Could not determine segment path');
+            return;
+        }
+        
+        this.logger.debug(`Final segment relative path: ${segmentUriRelative}`);
         
         const rawBody = (req as any).rawBody;
 
@@ -46,9 +67,12 @@ export class SegmentHandler {
 
         // Store the TS file
         const filePath = path.join(this.mockStoragePath, channelId, segmentUriRelative);
+        this.logger.debug(`Storing file at: ${filePath}`);
+        
         try {
             fs.mkdirSync(path.dirname(filePath), { recursive: true });
             fs.writeFileSync(filePath, rawBody);
+            this.logger.debug(`Successfully wrote file to: ${filePath}`);
         } catch (error) {
             this.logger.error(`[${channelId}] Failed to write segment file to ${filePath}`, error);
             res.status(500).send('Internal Server Error: Failed to write file');

@@ -81,6 +81,26 @@ app.put('/live/:channelId/', (req: Request, res: Response) => {
     m3u8Handler.handlePut(req, res);
 });
 
+// Add MediaPackage v2 style URL pattern support
+app.put('/in/v2/:channelId/:channelId/channel', (req: Request, res: Response) => {
+    logger.debug(`MediaPackage v2 handler triggered for: ${req.originalUrl}, channelId: ${req.params.channelId}`);
+    m3u8Handler.handlePut(req, res);
+});
+
+// Add route handlers for segments under MediaPackage v2 style paths
+app.put('/in/v2/:channelId/:channelId/:segmentPath(*)', (req: Request, res: Response) => {
+    if (req.params.segmentPath.endsWith('.ts')) {
+        logger.debug(`TS segment handler triggered for MediaPackage v2 style URL: ${req.originalUrl}`);
+        segmentHandler.handlePut(req, res);
+    } else if (req.params.segmentPath.endsWith('.m3u8')) {
+        logger.debug(`M3U8 handler triggered for MediaPackage v2 style URL: ${req.originalUrl}`);
+        m3u8Handler.handlePut(req, res);
+    } else {
+        logger.warn(`Unhandled file type for MediaPackage v2 style URL: ${req.originalUrl}`);
+        res.status(400).send('Unsupported file type');
+    }
+});
+
 // playlist.m3u8와 같은 형식의 URL도 지원
 app.put('/live/:channelId/:filename([^/]+\\.m3u8)', (req: Request, res: Response) => {
     logger.debug(`M3U8 handler triggered for file: ${req.originalUrl}, channelId: ${req.params.channelId}, filename: ${req.params.filename}`);

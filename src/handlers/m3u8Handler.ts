@@ -85,13 +85,27 @@ export class M3u8Handler {
         
         this.logger.debug(`Processing PUT request for path: ${fullPath}`);
         this.logger.debug(`Channel ID from params: ${channelId}`);
+        this.logger.debug(`Original URL: ${req.originalUrl}`);
+        this.logger.debug(`Request params: ${JSON.stringify(req.params)}`);
         
-        // 경로 처리 개선
-        // URL 형태: /live/channelId/
-        // URL 형태: /live/channelId/playlist.m3u8
+        // 경로 처리 개선 - MediaPackage v2 스타일과 일반 스타일 모두 지원
         let filename = '';
         
-        if (fullPath.endsWith('/')) {
+        if (fullPath.startsWith('/in/v2/')) {
+            // MediaPackage v2 스타일 URL: /in/v2/{channelId}/{channelId}/channel
+            if (fullPath.endsWith('/channel')) {
+                filename = 'playlist.m3u8';
+                this.logger.debug(`MediaPackage v2 channel endpoint detected, using default filename: ${filename}`);
+            } else if (req.params.segmentPath && req.params.segmentPath.endsWith('.m3u8')) {
+                // MediaPackage v2 스타일 m3u8 파일 요청
+                filename = req.params.segmentPath;
+                this.logger.debug(`MediaPackage v2 style m3u8 file detected: ${filename}`);
+            } else {
+                // 채널 엔드포인트도 아니고 m3u8 파일도 아닌 경우
+                filename = 'playlist.m3u8';
+                this.logger.debug(`Unknown MediaPackage v2 style URL, using default filename: ${filename}`);
+            }
+        } else if (fullPath.endsWith('/')) {
             // 경로가 슬래시로 끝나면 기본 파일명 사용
             filename = 'playlist.m3u8';
             this.logger.debug(`Path ends with slash, using default filename: ${filename}`);

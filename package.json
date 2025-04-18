@@ -8,12 +8,19 @@
     "build": "tsc",
     "dev": "nodemon --exec ts-node src/server.ts",
     "test": "jest",
-    "test:watch": "jest --watch"
+    "test:watch": "jest --watch",
+    "loglevel": "node set-loglevel.js",
+    "loglevel:debug": "node set-loglevel.js debug",
+    "loglevel:info": "node set-loglevel.js info",
+    "loglevel:warn": "node set-loglevel.js warn",
+    "loglevel:error": "node set-loglevel.js error"
   },
   "dependencies": {
     "@types/axios": "^0.9.36",
+    "@types/js-yaml": "^4.0.9",
     "axios": "^1.8.4",
     "express": "^4.18.2",
+    "js-yaml": "^4.1.0",
     "winston": "^3.17.0"
   },
   "devDependencies": {

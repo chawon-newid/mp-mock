@@ -1,75 +1,51 @@
 import winston from 'winston';
-import path from 'path';
 import fs from 'fs';
-import { promises as fsPromises } from 'fs';
+import path from 'path';
+import { ConfigLoader } from './configLoader';
 
-const storagePath = path.join(__dirname, '..', '..', 'mock_storage');
-const logFilePath = path.join(storagePath, 'server.log');
-
-// Ensure storage directory exists
-if (!fs.existsSync(storagePath)) {
-    fs.mkdirSync(storagePath, { recursive: true });
+// Ensure the storage directory exists
+const logsDir = './logs';
+if (!fs.existsSync(logsDir)) {
+  fs.mkdirSync(logsDir, { recursive: true });
 }
 
-// Check if we're in a test environment
-const isTest = process.env.NODE_ENV === 'test';
+const configLoader = ConfigLoader.getInstance();
+const serverConfig = configLoader.getServerConfig();
 
-// Create a different logger configuration for test environment
-const logger = isTest ? 
-    // Simple console logger for tests
-    winston.createLogger({
-        level: 'debug',
-        transports: [
-            new winston.transports.Console({
-                format: winston.format.combine(
-                    winston.format.timestamp(),
-                    winston.format.simple()
-                )
-            })
-        ]
-    }) : 
-    // Full logger for production
-    winston.createLogger({
-        level: process.env.LOG_LEVEL || 'info', // Default to 'info', can be configured via env var
-        format: winston.format.combine(
-            winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
-            winston.format.errors({ stack: true }), // Log stack traces for errors
-            winston.format.splat(),
-            winston.format.printf(({ timestamp, level, message, stack }) => {
-                return `[${timestamp}] [${level.toUpperCase()}] ${stack || message}`;
-            })
-        ),
-        transports: [
-            // Log to console
-            new winston.transports.Console({
-                format: winston.format.combine(
-                    winston.format.colorize(), // Add colors to console output
-                    winston.format.printf(({ timestamp, level, message, stack }) => {
-                        return `[${timestamp}] [${level}] ${stack || message}`;
-                    })
-                )
-            }),
-            // Log to file
-            new winston.transports.File({
-                filename: logFilePath,
-                maxsize: 5 * 1024 * 1024, // 5MB max size
-                maxFiles: 5, // Keep up to 5 log files
-                tailable: true,
-                format: winston.format.printf(({ timestamp, level, message, stack }) => {
-                    // File logs don't need color codes
-                    return `[${timestamp}] [${level.toUpperCase()}] ${stack || message}`;
-                })
-            })
-        ],
-        exceptionHandlers: [
-            // Handle uncaught exceptions
-            new winston.transports.File({ filename: path.join(storagePath, 'exceptions.log') })
-        ],
-        rejectionHandlers: [
-            // Handle unhandled promise rejections
-            new winston.transports.File({ filename: path.join(storagePath, 'rejections.log') })
-        ],
-        exitOnError: false // Do not exit on handled exceptions
-    });
+// Configure the logger
+const logger = winston.createLogger({
+  level: serverConfig.logLevel || 'info',
+  format: winston.format.combine(
+    winston.format.timestamp(),
+    winston.format.json()
+  ),
+  defaultMeta: { service: 'mediapackage-mock' },
+  transports: [
+    new winston.transports.Console({
+      format: winston.format.combine(
+        winston.format.colorize(),
+        winston.format.printf(({ level, message, timestamp }) => {
+          return `${timestamp} ${level}: ${message}`;
+        })
+      ),
+    }),
+    new winston.transports.File({ 
+      filename: path.join(logsDir, 'error.log'), 
+      level: 'error' 
+    }),
+    new winston.transports.File({ 
+      filename: path.join(logsDir, 'combined.log') 
+    }),
+  ],
+});
+
+// Function to reload logger configuration
+export function reloadLoggerConfig() {
+  const refreshedConfig = configLoader.reloadConfig();
+  const logLevel = refreshedConfig.server.logLevel || 'info';
+  
+  logger.level = logLevel;
+  logger.info(`Logger configuration reloaded. Log level set to: ${logLevel}`);
+}
 
 export default logger; 

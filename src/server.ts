@@ -5,16 +5,20 @@ import { M3u8TrackingInfo } from './types';
 import { M3u8Handler } from './handlers/m3u8Handler';
 import { SegmentHandler } from './handlers/segmentHandler';
 import { ReportGenerator } from './utils/reportGenerator';
+import { CleanupManager } from './utils/cleanupManager';
 import logger from './utils/logger';
+import { ConfigLoader } from './utils/configLoader';
+import { reloadLoggerConfig } from './utils/logger';
 
-// Configuration
-const config = {
-    port: process.env.PORT ? parseInt(process.env.PORT, 10) : 3001,
-    mockStoragePath: path.join(__dirname, '..', 'mock_storage'),
-    segmentArrivalTimeoutBufferMs: 2000, // 2 seconds buffer
-};
+// Load configuration
+const configLoader = ConfigLoader.getInstance();
+const serverConfig = configLoader.getServerConfig();
+const storageConfig = configLoader.getStorageConfig();
+const streamingConfig = configLoader.getStreamingConfig();
+const cleanupConfig = configLoader.getCleanupConfig();
+const reportsConfig = configLoader.getReportsConfig();
 
-const storagePath = path.join(__dirname, '..', 'mock_storage');
+const storagePath = storageConfig.path;
 
 // Ensure storage directory exists
 if (!fs.existsSync(storagePath)) {
@@ -27,22 +31,39 @@ const streamTracker: Map<string, M3u8TrackingInfo> = new Map();
 // Initialize handlers
 const m3u8Handler = new M3u8Handler(
     streamTracker,
-    config.mockStoragePath,
-    config.segmentArrivalTimeoutBufferMs,
+    storagePath,
+    streamingConfig.segmentTimeout,
     logger
 );
 
 const segmentHandler = new SegmentHandler(
     streamTracker,
-    config.mockStoragePath,
+    storagePath,
     logger
 );
 
 // Initialize report generator
-const reportGenerator = new ReportGenerator(config.mockStoragePath, streamTracker, logger);
+const reportGenerator = new ReportGenerator(storagePath, streamTracker, logger);
+
+// Initialize cleanup manager
+const cleanupManager = new CleanupManager(
+    storagePath,
+    {
+        isEnabled: cleanupConfig.enabled,
+        retentionPeriodMs: cleanupConfig.retentionPeriodHours * 60 * 60 * 1000, // Convert hours to ms
+        cleanupIntervalMs: cleanupConfig.intervalMinutes * 60 * 1000, // Convert minutes to ms
+        loggerInstance: logger
+    }
+);
 
 // Create Express app
 const app = express();
+
+// 성능 보고서 자동 생성 (단일 파일에 누적 방식)
+setInterval(() => {
+    const reportPath = path.join(reportsConfig.path, 'performance_history.txt');
+    reportGenerator.saveReport(reportPath);
+}, reportsConfig.intervalMinutes * 60 * 1000); // Convert minutes to ms
 
 // Middleware to get raw body for PUT requests
 app.use((req: Request, res: Response, next: NextFunction) => {
@@ -82,13 +103,47 @@ app.put('/live/:channelId/', (req: Request, res: Response) => {
 });
 
 // Add MediaPackage v2 style URL pattern support
-app.put('/in/v2/:channelId/:channelId/channel', (req: Request, res: Response) => {
-    logger.debug(`MediaPackage v2 handler triggered for: ${req.originalUrl}, channelId: ${req.params.channelId}`);
+app.put('/in/v2/:channelId/:redundantId/channel', (req: Request, res: Response) => {
+    logger.debug(`M3U8 handler triggered for MediaPackage v2 style channel URL: ${req.originalUrl}`);
+    logger.debug(`Channel ID: ${req.params.channelId}, Redundant ID: ${req.params.redundantId}`);
+    logger.debug(`This is a playlist endpoint request (channel)`);
+    
+    // 트래킹 키 로깅 (디버깅용)
+    const trackingKey = `${req.params.channelId}/playlist.m3u8`;
+    logger.debug(`Expected tracking key for channel endpoint: ${trackingKey}`);
+    
     m3u8Handler.handlePut(req, res);
 });
 
 // Add route handlers for segments under MediaPackage v2 style paths
-app.put('/in/v2/:channelId/:channelId/:segmentPath(*)', (req: Request, res: Response) => {
+app.put('/in/v2/:channelId/:redundantId/:segmentPath(*)', (req: Request, res: Response) => {
+    logger.debug(`Request params for MediaPackage v2 style URL: ${JSON.stringify(req.params)}`);
+    
+    // 트래킹 키 생성 로직 (디버깅용)
+    if (req.params.segmentPath.endsWith('.m3u8')) {
+        const m3u8Filename = req.params.segmentPath;
+        const baseFilename = m3u8Filename.replace(/\.[^.]+$/, '');
+        const trackingKey = `${req.params.channelId}/${baseFilename}.m3u8`;
+        logger.debug(`M3U8 request - expected tracking key: ${trackingKey}`);
+    } else if (req.params.segmentPath.endsWith('.ts')) {
+        const tsFilename = req.params.segmentPath;
+        const tsFilenameWithoutExt = tsFilename.replace(/\.[^.]+$/, '');
+        
+        // 가능한 트래킹 키 패턴들 생성
+        const possibleKeys = [];
+        
+        if (tsFilenameWithoutExt.includes('_')) {
+            const segmentNameParts = tsFilenameWithoutExt.split('_');
+            if (segmentNameParts.length >= 2) {
+                // 마지막 숫자 부분 제거 (예: channel_845548_23 -> channel_845548)
+                const baseNameWithoutNumber = segmentNameParts.slice(0, -1).join('_');
+                possibleKeys.push(`${req.params.channelId}/${baseNameWithoutNumber}.m3u8`);
+            }
+        }
+        
+        logger.debug(`TS segment request - possible tracking keys: ${possibleKeys.join(', ')}`);
+    }
+    
     if (req.params.segmentPath.endsWith('.ts')) {
         logger.debug(`TS segment handler triggered for MediaPackage v2 style URL: ${req.originalUrl}`);
         segmentHandler.handlePut(req, res);
@@ -119,7 +174,7 @@ app.get('/', (req: Request, res: Response) => {
 
 // GET handler for M3U8 and TS files
 app.get('/live/:channelId/*', (req: Request, res: Response) => {
-    const filePath = path.join(config.mockStoragePath, req.params.channelId, req.params[0]);
+    const filePath = path.join(storagePath, req.params.channelId, req.params[0]);
     logger.info(`[GET] Serving file: ${filePath}`);
     
     if (!fs.existsSync(filePath)) {
@@ -142,6 +197,38 @@ app.get('/report', (req: Request, res: Response) => {
     res.send(report);
 });
 
+// Add a log level configuration endpoint
+app.post('/config/loglevel', (req: Request, res: Response) => {
+    try {
+        const newLogLevel = req.query.level as string;
+        
+        if (!newLogLevel) {
+            return res.status(400).json({ error: 'Log level not provided', message: 'Please provide a log level as a query parameter' });
+        }
+        
+        // Validate log level
+        const validLogLevels = ['error', 'warn', 'info', 'http', 'verbose', 'debug', 'silly'];
+        if (!validLogLevels.includes(newLogLevel)) {
+            return res.status(400).json({ 
+                error: 'Invalid log level', 
+                message: `Log level must be one of: ${validLogLevels.join(', ')}` 
+            });
+        }
+        
+        // Update log level in memory
+        process.env.LOG_LEVEL = newLogLevel;
+        
+        // Reload logger configuration
+        reloadLoggerConfig();
+        
+        logger.info(`Log level changed to: ${newLogLevel}`);
+        return res.status(200).json({ success: true, message: `Log level set to: ${newLogLevel}` });
+    } catch (error) {
+        logger.error('Error updating log level:', error);
+        return res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
 // Error handler
 app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
     logger.error('Unhandled error:', err);
@@ -149,9 +236,9 @@ app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
 });
 
 // Start server
-app.listen(config.port, '0.0.0.0', () => {
-    logger.info(`MediaPackage Mock Server listening on port ${config.port}`);
-    logger.info(`Storing received files in: ${config.mockStoragePath}`);
+app.listen(serverConfig.port, '0.0.0.0', () => {
+    logger.info(`MediaPackage Mock Server listening on port ${serverConfig.port}`);
+    logger.info(`Storing received files in: ${storagePath}`);
     const interfaces = require('os').networkInterfaces();
     let serverIp = 'localhost';
     for (const name of Object.keys(interfaces)) {
@@ -163,5 +250,24 @@ app.listen(config.port, '0.0.0.0', () => {
         }
         if (serverIp !== 'localhost') break;
     }
-    logger.info(`Server is accessible from: http://${serverIp}:${config.port}`);
+    logger.info(`Server is accessible from: http://${serverIp}:${serverConfig.port}`);
+    
+    // 정리 작업 시작
+    cleanupManager.start();
+    if (cleanupConfig.enabled) {
+        logger.info(`TS file cleanup enabled. Files will be kept for ${cleanupConfig.retentionPeriodHours} hours`);
+    }
+});
+
+// 애플리케이션 종료 시 정리 작업 중지
+process.on('SIGINT', () => {
+    logger.info('Shutting down server...');
+    cleanupManager.stop();
+    process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+    logger.info('Received SIGTERM, shutting down server...');
+    cleanupManager.stop();
+    process.exit(0);
 }); 

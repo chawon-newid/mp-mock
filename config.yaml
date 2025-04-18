@@ -1,0 +1,41 @@
+# MediaPackage Mock Server 구성 파일
+
+# 서버 구성
+server:
+  # 서버가 바인딩할 포트 (기본값: 3001)
+  port: 3002
+  # 로그 레벨 (error, warn, info, http, verbose, debug, silly)
+  logLevel: "info"
+
+# 스트리밍 구성
+streaming:
+  # 세그먼트 도착 타임아웃 버퍼 (밀리초)
+  # 세그먼트가 예상 시간보다 지연되어도 허용할 추가 시간
+  segmentArrivalTimeoutBufferMs: 0
+
+# 스토리지 구성
+storage:
+  # 수신된 파일이 저장될 기본 경로
+  mockStoragePath: "./mock_storage"
+  
+  # TS 파일 정리 구성
+  cleanup:
+    # 자동 정리 활성화 여부 (true/false)
+    enabled: true
+    
+    # TS 파일 보관 기간 (밀리초)
+    # 기본값: 3600000 (1시간)
+    retentionPeriodMs: 3600000
+    
+    # 정리 작업 실행 간격 (밀리초)
+    # 기본값: 300000 (5분)
+    cleanupIntervalMs: 300000
+
+# 보고서 생성 구성
+reports:
+  # 성능 보고서 자동 생성 간격 (밀리초)
+  # 기본값: 60000 (1분)
+  reportIntervalMs: 60000
+  
+  # 보고서 파일 이름
+  filename: "performance_history.txt" 

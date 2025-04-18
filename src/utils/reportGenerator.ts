@@ -43,31 +43,68 @@ export class ReportGenerator {
     private calculateStreamMetrics(channelId: string, trackingInfo: M3u8TrackingInfo): StreamMetrics {
         const segments = Array.from(trackingInfo.segments.values());
         const receivedSegments = segments.filter(s => s.received);
+        
+        // 디버그 로깅 추가
+        this.logger.debug(`Calculating metrics for ${channelId}, M3U8: ${trackingInfo.m3u8Uri}`);
+        this.logger.debug(`Total segments: ${segments.length}, Received segments: ${receivedSegments.length}`);
+        
+        // 세그먼트 정보 로깅
+        if (receivedSegments.length > 0) {
+            const firstSegment = receivedSegments[0];
+            this.logger.debug(`Sample segment - size: ${firstSegment.size || 0}, receivedAt: ${firstSegment.receivedAt || 0}, firstSeenAt: ${firstSegment.firstSeenAt || 0}`);
+        }
+        
         const totalBytes = receivedSegments.reduce((sum, seg) => sum + (seg.size || 0), 0);
-        const startTime = receivedSegments.length > 0 ? Math.min(...receivedSegments.map(s => s.receivedAt || 0)) : 0;
-        const endTime = receivedSegments.length > 0 ? Math.max(...receivedSegments.map(s => s.receivedAt || 0)) : 0;
-        const duration = (endTime - startTime) / 1000; // in seconds
-        const bitrate = duration > 0 ? (totalBytes * 8) / duration : 0; // in bits per second
+        
+        // 시작 및 종료 시간 계산 개선
+        let startTime = 0;
+        let endTime = 0;
+        
+        if (receivedSegments.length > 0) {
+            // 수신된 세그먼트의 타임스탬프 확인
+            const receivedTimes = receivedSegments
+                .filter(s => s.receivedAt !== undefined)
+                .map(s => s.receivedAt as number);
+                
+            if (receivedTimes.length > 0) {
+                startTime = Math.min(...receivedTimes);
+                endTime = Math.max(...receivedTimes);
+            } else {
+                // 타임스탬프가 없는 경우 대체값 사용
+                startTime = trackingInfo.receivedAt;
+                endTime = Date.now();
+            }
+        } else {
+            // 수신된 세그먼트가 없는 경우
+            startTime = trackingInfo.receivedAt;
+            endTime = trackingInfo.lastSegmentReceivedTime || Date.now();
+        }
+        
+        // 최소 1초의 지속시간 보장
+        const duration = Math.max(1, (endTime - startTime) / 1000); // 초 단위
+        const bitrate = totalBytes * 8 / duration; // 초당 비트 수
 
-        // Calculate latency metrics
-        // Segment transfer delays (from appearing in playlist to receipt)
+        // 지연 시간 메트릭 계산
+        // 세그먼트 전송 지연 (플레이리스트에 등장 -> 수신까지)
         const transferDelays = receivedSegments
-            .filter(s => s.firstSeenAt !== undefined && s.receivedAt)
+            .filter(s => s.firstSeenAt !== undefined && s.receivedAt !== undefined)
             .map(s => (s.receivedAt as number) - (s.firstSeenAt as number));
         
-        const avgSegmentTransferDelay = transferDelays.length > 0
-            ? transferDelays.reduce((sum, delay) => sum + delay, 0) / transferDelays.length
-            : 0;
+        this.logger.debug(`Transfer delays collected: ${transferDelays.length}`);
         
-        const minSegmentTransferDelay = transferDelays.length > 0
-            ? Math.min(...transferDelays)
-            : 0;
+        let avgSegmentTransferDelay = 0;
+        let minSegmentTransferDelay = 0;
+        let maxSegmentTransferDelay = 0;
+        
+        if (transferDelays.length > 0) {
+            avgSegmentTransferDelay = transferDelays.reduce((sum, delay) => sum + delay, 0) / transferDelays.length;
+            minSegmentTransferDelay = Math.min(...transferDelays);
+            maxSegmentTransferDelay = Math.max(...transferDelays);
             
-        const maxSegmentTransferDelay = transferDelays.length > 0
-            ? Math.max(...transferDelays)
-            : 0;
+            this.logger.debug(`Transfer delay stats - avg: ${avgSegmentTransferDelay.toFixed(2)}ms, min: ${minSegmentTransferDelay}ms, max: ${maxSegmentTransferDelay}ms`);
+        }
         
-        // Calculate M3U8 update interval
+        // M3U8 업데이트 간격 계산
         const m3u8Updates = trackingInfo.previousM3u8Updates || [];
         const m3u8UpdateIntervals = [];
         
@@ -81,9 +118,11 @@ export class ReportGenerator {
         
         const lastM3u8UpdateTime = m3u8Updates.length > 0 ? m3u8Updates[0] : 0;
         
-        // Calculate reliability metrics
-        // Segment arrival jitter (standard deviation of inter-segment arrival times)
+        // 신뢰성 메트릭 계산
+        // 세그먼트 도착 지터 (도착 간격의 표준 편차)
         const arrivalIntervals = trackingInfo.segmentArrivalIntervals || [];
+        this.logger.debug(`Arrival intervals collected: ${arrivalIntervals.length}`);
+        
         let segmentArrivalJitter = 0;
         
         if (arrivalIntervals.length > 1) {
@@ -92,13 +131,17 @@ export class ReportGenerator {
                 const diff = interval - meanInterval;
                 return sum + (diff * diff);
             }, 0);
-            // Standard deviation = sqrt(variance), where variance = sum of squared differences / count
+            // 표준 편차 = sqrt(분산), 분산 = 차이 제곱합 / 갯수
             segmentArrivalJitter = Math.sqrt(sumSquaredDifferences / arrivalIntervals.length);
+            
+            this.logger.debug(`Jitter calculation - mean interval: ${meanInterval.toFixed(2)}ms, jitter: ${segmentArrivalJitter.toFixed(2)}ms`);
         }
         
-        // For timeout events, use the values tracked in M3u8TrackingInfo
+        // 타임아웃 이벤트는 M3u8TrackingInfo에 추적된 값 사용
         const timeoutEvents = trackingInfo.timeoutEvents || 0;
         const successiveTimeouts = trackingInfo.maxSuccessiveTimeouts || 0;
+        
+        this.logger.debug(`Timeout stats - events: ${timeoutEvents}, max successive: ${successiveTimeouts}`);
 
         return {
             channelId,
@@ -113,17 +156,17 @@ export class ReportGenerator {
             duration,
             bitrate,
             
-            // Latency metrics
+            // 지연 시간 메트릭
             avgSegmentTransferDelay,
             minSegmentTransferDelay,
             maxSegmentTransferDelay,
             m3u8UpdateInterval,
             lastM3u8UpdateTime,
             
-            // Reliability metrics
+            // 신뢰성 메트릭
             segmentArrivalJitter,
             timeoutEvents,
-            successiveTimeouts: successiveTimeouts,
+            successiveTimeouts,
             segmentArrivalIntervals: arrivalIntervals
         };
     }
@@ -211,8 +254,23 @@ export class ReportGenerator {
         try {
             const report = this.generateReport();
             const reportPath = path.join(this.mockStoragePath, filename);
-            fs.writeFileSync(reportPath, report);
-            this.logger.info(`Performance report saved to: ${reportPath}`);
+            
+            // 타임스탬프와 구분선 추가
+            const timestampedReport = [
+                '\n\n========================================',
+                `Performance Report - ${new Date().toISOString()}`,
+                '========================================\n',
+                report
+            ].join('\n');
+            
+            // 파일이 존재하면 추가, 없으면 새로 생성
+            if (fs.existsSync(reportPath)) {
+                fs.appendFileSync(reportPath, timestampedReport);
+                this.logger.info(`Performance report appended to: ${reportPath}`);
+            } else {
+                fs.writeFileSync(reportPath, timestampedReport);
+                this.logger.info(`Performance report created at: ${reportPath}`);
+            }
         } catch (error) {
             this.logger.error(`Failed to save performance report:`, error);
         }

@@ -83,14 +83,13 @@ MP-MOCK 서버는 다음과 같은 성능 지표를 수집합니다:
 
 ## 로깅
 
-서버는 winston 로깅 라이브러리를 사용하여 로그를 콘솔과 파일에 기록합니다:
+서버는 Winston 로깅 라이브러리를 사용하여 로그를 콘솔과 파일에 기록합니다:
 
 - **콘솔 로그**: 모든 로그 메시지를 표준 출력에 표시
-- **파일 로그**: `mock_storage/server.log` 파일에 로그 저장
-- **예외 로그**: 처리되지 않은 예외는 `mock_storage/exceptions.log`에 저장
-- **거부 로그**: 처리되지 않은 프로미스 거부는 `mock_storage/rejections.log`에 저장
+- **오류 로그 파일**: `./logs/error.log` - 오류 메시지만 포함
+- **종합 로그 파일**: `./logs/combined.log` - 모든 로그 메시지 포함
 
-로그 레벨은 환경 변수 `LOG_LEVEL`로 설정할 수 있습니다(기본값: 'info').
+로그 레벨은 `config.yaml` 파일의 `server.logLevel` 속성, 환경 변수 `LOG_LEVEL`, 또는 API 엔드포인트를 통해 설정할 수 있습니다.
 
 ## 성능 보고서
 
@@ -100,10 +99,81 @@ MP-MOCK 서버는 다음과 같은 성능 지표를 수집합니다:
 
 ## 구성 옵션
 
-현재 다음 환경 변수를 통해 서버를 구성할 수 있습니다:
+### 구성 파일 (config.yaml)
 
-- **PORT**: 서버 포트 (기본값: 3001)
+서버는 `config.yaml` 파일을 통해 구성할 수 있습니다. 기본 위치는 프로젝트 루트 디렉토리입니다.
+
+```yaml
+# 서버 구성
+server:
+  # 서버가 바인딩할 포트 (기본값: 3001)
+  port: 3001
+  # 로그 레벨 (error, warn, info, http, verbose, debug, silly)
+  logLevel: "info"
+
+# 스트리밍 구성
+streaming:
+  # 세그먼트 도착 타임아웃 버퍼 (밀리초)
+  segmentArrivalTimeoutBufferMs: 0
+
+# 스토리지 구성
+storage:
+  # 수신된 파일이 저장될 기본 경로
+  mockStoragePath: "./mock_storage"
+  
+  # TS 파일 정리 구성
+  cleanup:
+    # 자동 정리 활성화 여부 (true/false)
+    enabled: true
+    
+    # TS 파일 보관 기간 (밀리초)
+    # 기본값: 3600000 (1시간)
+    retentionPeriodMs: 3600000
+    
+    # 정리 작업 실행 간격 (밀리초)
+    # 기본값: 300000 (5분)
+    cleanupIntervalMs: 300000
+
+# 보고서 생성 구성
+reports:
+  # 성능 보고서 자동 생성 간격 (밀리초)
+  reportIntervalMs: 60000
+  
+  # 보고서 파일 이름
+  filename: "performance_history.txt"
+```
+
+### 환경 변수
+
+다음 환경 변수를 통해 구성 파일의 설정을 재정의할 수 있습니다:
+
+- **SERVER_PORT**: 서버 포트
+- **SERVER_HOST**: 서버 호스트
 - **LOG_LEVEL**: 로깅 레벨 (기본값: 'info')
+- **STORAGE_PATH**: 저장 경로
+
+### 로그 레벨 동적 변경
+
+서버 실행 중에 로그 레벨을 변경하는 방법은 다음과 같습니다:
+
+1. **npm 스크립트 사용**:
+```bash
+# 기본 명령 (사용자에게 레벨 입력 요청)
+npm run loglevel
+
+# 특정 레벨로 직접 설정
+npm run loglevel:debug
+npm run loglevel:info
+npm run loglevel:warn
+npm run loglevel:error
+```
+
+2. **직접 API 엔드포인트 호출**:
+```bash
+curl -X POST "http://localhost:3001/config/loglevel?level=debug"
+```
+
+유효한 로그 레벨: 'error', 'warn', 'info', 'http', 'verbose', 'debug', 'silly'
 
 ## 사용 예시
 
@@ -117,6 +187,61 @@ curl -X PUT -T playlist.m3u8 http://localhost:3001/live/channel1/
 
 ```bash
 curl -X PUT -T segment1.ts http://localhost:3001/live/channel1/segment1.ts
+```
+
+### HLS 스트림 시청하기
+
+#### 브라우저나 HLS 플레이어에서 직접 재생
+
+M3U8 플레이리스트 URL을 직접 HLS 지원 비디오 플레이어에 입력하여 스트림을 시청할 수 있습니다:
+
+```
+http://localhost:3001/live/channel1/playlist.m3u8
+```
+
+#### HTML5 비디오 태그와 HLS.js 사용하기
+
+HLS.js 라이브러리를 사용하여 웹 페이지에서 스트림을 재생할 수 있습니다:
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+  <title>HLS 스트림 플레이어</title>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+</head>
+<body>
+  <video id="video" controls></video>
+  <script>
+    const video = document.getElementById('video');
+    const videoSrc = 'http://localhost:3001/live/channel1/playlist.m3u8';
+    
+    if (Hls.isSupported()) {
+      const hls = new Hls();
+      hls.loadSource(videoSrc);
+      hls.attachMedia(video);
+      hls.on(Hls.Events.MANIFEST_PARSED, function() {
+        video.play();
+      });
+    } 
+    // HLS를 기본 지원하는 브라우저용 (Safari 등)
+    else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      video.src = videoSrc;
+      video.addEventListener('loadedmetadata', function() {
+        video.play();
+      });
+    }
+  </script>
+</body>
+</html>
+```
+
+#### VLC 또는 기타 미디어 플레이어로 시청하기
+
+VLC와 같은 미디어 플레이어에서 '네트워크 스트림 열기' 옵션을 사용하여 다음 URL을 입력합니다:
+
+```
+http://localhost:3001/live/channel1/playlist.m3u8
 ```
 
 ### 성능 보고서 조회

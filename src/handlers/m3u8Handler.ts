@@ -90,9 +90,11 @@ export class M3u8Handler {
         
         // 경로 처리 개선 - MediaPackage v2 스타일과 일반 스타일 모두 지원
         let filename = '';
+        let isMediaPackageV2 = false;
         
         if (fullPath.startsWith('/in/v2/')) {
-            // MediaPackage v2 스타일 URL: /in/v2/{channelId}/{channelId}/channel
+            isMediaPackageV2 = true;
+            // MediaPackage v2 스타일 URL: /in/v2/{channelId}/{redundantId}/channel
             if (fullPath.endsWith('/channel')) {
                 filename = 'playlist.m3u8';
                 this.logger.debug(`MediaPackage v2 channel endpoint detected, using default filename: ${filename}`);
@@ -130,7 +132,19 @@ export class M3u8Handler {
             }
         }
         
-        const m3u8Key = `${channelId}/${filename}`;
+        // 파일 이름에서 확장자 제거 후 baseFilename 추출
+        const baseFilename = filename.replace(/\.[^.]+$/, '');
+        
+        // m3u8 트래킹 키 생성: 항상 channelId/filename.m3u8 형식 사용
+        const m3u8Key = `${channelId}/${baseFilename}.m3u8`;
+        
+        // MediaPackage v2 스타일 URL인 경우 추가 로깅
+        if (isMediaPackageV2) {
+            this.logger.debug(`MediaPackage v2 URL detected for ${fullPath}`);
+            this.logger.debug(`Using channelId: ${channelId}, baseFilename: ${baseFilename}`);
+            this.logger.debug(`Generated tracking key: ${m3u8Key}`);
+        }
+        
         const rawBody = (req as any).rawBody;
 
         this.logger.debug(`WebDAV PUT request received for ${fullPath}`);
